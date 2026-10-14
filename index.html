@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Low-Poly Image Overlay Editor</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <!-- Toolbar ------------------------------------------------------ -->
+      <header class="toolbar">
+        <div class="toolbar-group">
+          <span class="brand">Low-Poly<span class="brand-accent">Overlay</span></span>
+        </div>
+
+        <div class="toolbar-group" role="toolbar" aria-label="Tools">
+          <button id="tool-select" class="tool-btn" title="Select tool (V)"><span class="icon">↖</span>Select</button>
+          <button id="tool-draw" class="tool-btn" title="Draw tool (P)"><span class="icon">✎</span>Draw</button>
+          <button id="tool-eyedropper" class="tool-btn" title="Eyedropper (I)"><span class="icon">◉</span>Eyedropper</button>
+          <button id="tool-pan" class="tool-btn" title="Pan tool (H)"><span class="icon">✥</span>Pan</button>
+        </div>
+
+        <div class="toolbar-group">
+          <button id="btn-undo" class="icon-btn" title="Undo (Ctrl/Cmd+Z)">↶</button>
+          <button id="btn-redo" class="icon-btn" title="Redo (Ctrl/Cmd+Shift+Z)">↷</button>
+        </div>
+
+        <div class="toolbar-group">
+          <button id="btn-import" class="btn">Import image</button>
+          <input id="file-input" type="file" accept="image/*" hidden />
+          <button id="btn-fit" class="btn" title="Fit to screen (F)">Fit</button>
+          <button id="btn-zoom-out" class="icon-btn" title="Zoom out (-)">−</button>
+          <span id="zoom-label" class="zoom-label">100%</span>
+          <button id="btn-zoom-in" class="icon-btn" title="Zoom in (+)">+</button>
+        </div>
+
+        <div class="toolbar-group">
+          <button id="btn-export" class="btn">Export</button>
+          <button id="btn-save-project" class="btn" title="Save project (Ctrl/Cmd+S)">Save project</button>
+          <button id="btn-load-project" class="btn" title="Open project (Ctrl/Cmd+O)">Open project</button>
+          <input id="project-input" type="file" accept="application/json,.json" hidden />
+        </div>
+
+        <div class="toolbar-group toolbar-right">
+          <span id="image-label" class="image-label">No image loaded</span>
+          <button id="btn-help" class="icon-btn" title="Shortcuts (?)">?</button>
+        </div>
+      </header>
+
+      <!-- Main --------------------------------------------------------- -->
+      <main class="main">
+        <section id="workspace" class="workspace" data-tool="select">
+          <svg id="stage" class="stage" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div id="magnifier" class="magnifier"></div>
+          <div class="workspace-hint">Drop an image here, or use “Import image”.</div>
+        </section>
+
+        <!-- Properties panel ------------------------------------------- -->
+        <aside class="panel">
+          <div class="panel-scroll">
+            <section class="panel-section">
+              <h2>Display</h2>
+              <label class="switch"
+                ><input id="chk-xray" type="checkbox" /><span>X-ray (hide fills, keep outlines)</span></label
+              >
+              <label class="switch"
+                ><input id="chk-bg" type="checkbox" checked /><span>Show background image</span></label
+              >
+              <label class="switch"
+                ><input id="chk-outlines" type="checkbox" checked /><span>Show outlines</span></label
+              >
+              <label class="switch"
+                ><input id="chk-vertices" type="checkbox" checked /><span>Show vertices</span></label
+              >
+              <label class="switch"
+                ><input id="chk-highlight" type="checkbox" checked /><span>Highlight selected polygon</span></label
+              >
+              <div class="field-row">
+                <label for="outline-color">Outline colour</label>
+                <input id="outline-color" type="color" value="#ffffff" />
+              </div>
+              <div class="field-row">
+                <label for="outline-width">Outline width</label>
+                <input id="outline-width" type="range" min="0" max="10" step="0.5" value="2" />
+              </div>
+              <div class="field-row">
+                <label for="overlay-opacity">Overlay opacity</label>
+                <input id="overlay-opacity" type="range" min="0" max="1" step="0.01" value="1" />
+                <span id="overlay-opacity-value" class="value">100%</span>
+              </div>
+            </section>
+
+            <section class="panel-section">
+              <h2>New polygons</h2>
+              <label class="switch"
+                ><input id="chk-autocolor" type="checkbox" checked /><span>Auto-colour from image</span></label
+              >
+              <div class="field-row">
+                <label for="default-fill">Default colour</label>
+                <input id="default-fill" type="color" value="#8a8f98" />
+              </div>
+            </section>
+
+            <section class="panel-section">
+              <h2>Selected polygon</h2>
+              <p id="no-selection" class="muted">Nothing selected. Use the Select tool and click a polygon.</p>
+
+              <div id="selection-panel" hidden>
+                <div class="field-row">
+                  <label for="fill-color">Fill colour</label>
+                  <input id="fill-color" type="color" value="#888888" />
+                </div>
+                <div class="field-row">
+                  <label for="fill-hex">HEX</label>
+                  <input id="fill-hex" type="text" spellcheck="false" placeholder="#rrggbb" />
+                </div>
+                <div class="field-row rgb-row">
+                  <label>RGB</label>
+                  <input id="fill-r" type="number" min="0" max="255" />
+                  <input id="fill-g" type="number" min="0" max="255" />
+                  <input id="fill-b" type="number" min="0" max="255" />
+                </div>
+                <div class="field-row">
+                  <label for="opacity-range">Opacity</label>
+                  <input id="opacity-range" type="range" min="0" max="100" step="1" value="100" />
+                  <input id="opacity-number" type="number" min="0" max="100" step="1" class="number-small" />
+                </div>
+                <div class="button-row">
+                  <button id="btn-avg-rgb" class="btn" title="Average RGB colour inside the polygon">Avg colour (RGB)</button>
+                  <button id="btn-avg-lab" class="btn" title="Perceptual average using CIELAB">Avg (LAB)</button>
+                </div>
+
+                <div class="button-row">
+                  <button id="btn-front" class="btn" title="Bring to front">Front</button>
+                  <button id="btn-raise" class="btn" title="Raise">Raise</button>
+                  <button id="btn-lower" class="btn" title="Lower">Lower</button>
+                  <button id="btn-back" class="btn" title="Send to back">Back</button>
+                </div>
+                <div class="button-row">
+                  <button id="btn-delete" class="btn danger" title="Delete polygon (Delete)">Delete polygon</button>
+                </div>
+
+                <h3>Subdivision</h3>
+                <p class="hint">Triangulates the polygon and splits triangles by their centroid. Works with concave shapes.</p>
+                <div class="field-row">
+                  <label for="subdiv-range">Detail</label>
+                  <input id="subdiv-range" type="range" min="0" max="4" step="1" value="0" />
+                  <span id="subdiv-faces" class="value">0 faces</span>
+                </div>
+                <div class="field-row">
+                  <label for="subdiv-color-mode">Face colour</label>
+                  <select id="subdiv-color-mode">
+                    <option value="inherit">Inherit original</option>
+                    <option value="rgb">Sample average (RGB)</option>
+                    <option value="lab">Sample average (LAB)</option>
+                  </select>
+                </div>
+                <div class="button-row">
+                  <button id="btn-subdiv-preview" class="btn">Preview</button>
+                  <button id="btn-subdiv-apply" class="btn primary">Apply</button>
+                  <button id="btn-subdiv-cancel" class="btn">Cancel</button>
+                </div>
+
+                <h3>Texture (optional)</h3>
+                <div class="field-row">
+                  <label for="texture-scale">Scale</label>
+                  <input id="texture-scale" type="range" min="0.1" max="8" step="0.05" value="1" disabled />
+                  <span id="texture-scale-value" class="value">1.00×</span>
+                </div>
+                <div class="field-row rgb-row">
+                  <label>Offset</label>
+                  <input id="texture-offset-x" type="number" step="1" value="0" disabled />
+                  <input id="texture-offset-y" type="number" step="1" value="0" disabled />
+                </div>
+                <div class="button-row">
+                  <button id="btn-texture-load" class="btn">Load texture</button>
+                  <button id="btn-texture-clear" class="btn" disabled>Clear</button>
+                  <input id="texture-input" type="file" accept="image/*" hidden />
+                </div>
+              </div>
+            </section>
+
+            <section class="panel-section">
+              <h2>Polygons <span id="polygon-count" class="badge">0</span></h2>
+              <div id="polygon-list" class="polygon-list"></div>
+            </section>
+          </div>
+        </aside>
+      </main>
+
+      <!-- Eyedropper options ------------------------------------------- -->
+      <div id="eye-options" class="eye-options" hidden>
+        <span class="eye-title">Eyedropper</span>
+        <label><input id="eye-mode-original" type="radio" name="eyemode" value="original" checked /> Original image</label>
+        <label><input id="eye-mode-composite" type="radio" name="eyemode" value="composite" /> Visible composite</label>
+        <label class="eye-zoom-label"
+          >Zoom <input id="eye-zoom" type="range" min="2" max="24" step="1" value="8" />
+        </label>
+      </div>
+
+      <!-- Status bar --------------------------------------------------- -->
+      <footer class="statusbar">
+        <span id="status" data-tone="info">Import an image to begin.</span>
+      </footer>
+    </div>
+
+    <!-- Help modal ----------------------------------------------------- -->
+    <div id="help-modal" class="modal" hidden>
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2>Shortcuts &amp; tips</h2>
+          <button id="btn-help-close" class="icon-btn">✕</button>
+        </div>
+        <div class="modal-body">
+          <table class="shortcuts">
+            <tr><td>V / P / I / H</td><td>Select · Draw · Eyedropper · Pan</td></tr>
+            <tr><td>Click</td><td>Place a vertex (Draw tool)</td></tr>
+            <tr><td>Click first point / double-click / Enter</td><td>Close the polygon</td></tr>
+            <tr><td>Esc</td><td>Cancel drawing, clear selection, cancel eyedropper</td></tr>
+            <tr><td>Drag vertex</td><td>Reshape the selected polygon</td></tr>
+            <tr><td>Drag interior</td><td>Move the polygon</td></tr>
+            <tr><td>Double-click an edge</td><td>Insert a vertex</td></tr>
+            <tr><td>Delete / Backspace</td><td>Delete selected vertex, else polygon</td></tr>
+            <tr><td>Wheel</td><td>Zoom around the cursor</td></tr>
+            <tr><td>Middle-drag / Alt-drag / Space-drag</td><td>Pan the view</td></tr>
+            <tr><td>F</td><td>Fit image to screen</td></tr>
+            <tr><td>Ctrl/Cmd + Z / Shift + Z</td><td>Undo · Redo</td></tr>
+            <tr><td>Ctrl/Cmd + S / O</td><td>Save project · Open project</td></tr>
+            <tr><td>?</td><td>Toggle this panel</td></tr>
+          </table>
+          <p class="hint">
+            Colour sampling always reads the <strong>original</strong> image, never the overlay. Drag &amp; drop an image
+            or a saved project file onto the canvas to open it.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Export modal ---------------------------------------------------- -->
+    <div id="export-modal" class="modal" hidden>
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2>Export</h2>
+          <button id="btn-export-close" class="icon-btn">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="field-row">
+            <label for="export-scale">Resolution scale</label>
+            <input id="export-scale" type="number" min="0.1" max="8" step="0.1" value="1" />
+            <span class="value">× original</span>
+          </div>
+          <label class="switch"
+            ><input id="export-respect-visibility" type="checkbox" /><span
+              >Respect current visibility (X-ray / hidden background) for the composition</span
+            ></label
+          >
+          <div class="export-grid">
+            <button id="btn-export-composite" class="btn">Full composition · PNG</button>
+            <button id="btn-export-polygons" class="btn">Polygons only · transparent PNG</button>
+            <button id="btn-export-original" class="btn">Original image · PNG</button>
+            <button id="btn-export-svg" class="btn">Polygons · SVG</button>
+            <button id="btn-export-svg-image" class="btn">Polygons + image · SVG</button>
+            <button id="btn-export-project" class="btn">Project file · JSON</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="src/app.js"></script>
+  </body>
+</html>

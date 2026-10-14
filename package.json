@@ -1,0 +1,13 @@
+{
+  "name": "low-poly-overlay",
+  "version": "1.0.0",
+  "description": "Browser-based low-poly image overlay editor. Import an image and trace it with coloured polygons.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "serve": "python3 -m http.server 8000"
+  },
+  "keywords": ["low-poly", "overlay", "svg", "editor", "canvas"],
+  "license": "MIT"
+}
