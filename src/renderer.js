@@ -47,6 +47,11 @@ export class Renderer {
     this.bgHref = null;
     this.subdivLayer = null;
     this.patternIds = new Map();
+    // Nodes are reused across renders (keyed by polygon id) so the DOM stays
+    // stable — browsers suppress synthetic events like dblclick when the target
+    // element is replaced between clicks, and reuse avoids needless churn.
+    this.polygonNodes = new Map();
+    this.outlineNodes = new Map();
   }
 
   /* ---------------------------------------------------------------- */
@@ -141,13 +146,42 @@ export class Renderer {
   /* Polygons                                                          */
   /* ---------------------------------------------------------------- */
 
+  polygonNode(id) {
+    let node = this.polygonNodes.get(id);
+    if (!node) {
+      node = el('polygon', { 'data-id': id });
+      this.polygonNodes.set(id, node);
+    }
+    return node;
+  }
+
+  outlineNode(id) {
+    let node = this.outlineNodes.get(id);
+    if (!node) {
+      node = el('polygon', { 'data-id': id });
+      this.outlineNodes.set(id, node);
+    }
+    return node;
+  }
+
+  /** Remove nodes for polygons that no longer exist. */
+  pruneNodes(store, seen) {
+    for (const [id, node] of store) {
+      if (!seen.has(id)) {
+        node.remove();
+        store.delete(id);
+      }
+    }
+  }
+
   renderPolygons(polygons, settings, selection) {
     const selected = new Set(selection || []);
     const nodes = [];
-    const usedPatterns = new Set();
+    const seen = new Set();
 
     for (const polygon of polygons) {
       if (polygon.vertices.length < 2) continue;
+      seen.add(polygon.id);
       const visible = polygon.visible !== false;
 
       const fillOpacity = settings.xray
@@ -163,52 +197,51 @@ export class Renderer {
       let fill = polygon.fill || '#888888';
       if (polygon.texture && polygon.texture.href) {
         const patternId = this.syncTexturePattern(polygon);
-        if (patternId) {
-          fill = `url(#${patternId})`;
-          usedPatterns.add(patternId);
-        }
+        if (patternId) fill = `url(#${patternId})`;
       }
 
-      nodes.push(
-        el('polygon', {
-          'data-id': polygon.id,
-          points: pointsAttr(polygon.vertices),
-          fill,
-          'fill-opacity': visible ? fillOpacity : 0,
-          stroke: 'none',
-        }),
-      );
+      const node = this.polygonNode(polygon.id);
+      node.setAttribute('points', pointsAttr(polygon.vertices));
+      node.setAttribute('fill', fill);
+      node.setAttribute('fill-opacity', String(visible ? fillOpacity : 0));
+      node.setAttribute('stroke', 'none');
+      nodes.push(node);
     }
 
-    this.polygonLayer.replaceChildren(...nodes);
+    // `append` moves already-attached nodes into the requested order.
+    this.polygonLayer.append(...nodes);
+    this.pruneNodes(this.polygonNodes, seen);
+
     this.renderOutlines(polygons, settings, selected);
   }
 
   renderOutlines(polygons, settings, selected) {
     if (!settings.showOutlines) {
       this.outlineLayer.replaceChildren();
+      this.outlineNodes.clear();
       return;
     }
 
     const nodes = [];
+    const seen = new Set();
     for (const polygon of polygons) {
       if (polygon.vertices.length < 2 || polygon.visible === false) continue;
+      seen.add(polygon.id);
       const isSelected = selected.has(polygon.id);
       const isHighlighted = isSelected && settings.highlightSelection;
-      nodes.push(
-        el('polygon', {
-          'data-id': polygon.id,
-          points: pointsAttr(polygon.vertices),
-          fill: 'none',
-          stroke: isHighlighted ? 'var(--accent, #4f9dff)' : settings.outlineColor,
-          'stroke-width': isHighlighted ? settings.outlineWidth + 1.5 : settings.outlineWidth,
-          'stroke-linejoin': 'round',
-          'vector-effect': 'non-scaling-stroke',
-          class: isHighlighted ? 'poly-outline selected' : 'poly-outline',
-        }),
-      );
+
+      const node = this.outlineNode(polygon.id);
+      node.setAttribute('points', pointsAttr(polygon.vertices));
+      node.setAttribute('fill', 'none');
+      node.setAttribute('stroke', isHighlighted ? 'var(--accent, #4f9dff)' : settings.outlineColor);
+      node.setAttribute('stroke-width', String(isHighlighted ? settings.outlineWidth + 1.5 : settings.outlineWidth));
+      node.setAttribute('stroke-linejoin', 'round');
+      node.setAttribute('vector-effect', 'non-scaling-stroke');
+      node.setAttribute('class', isHighlighted ? 'poly-outline selected' : 'poly-outline');
+      nodes.push(node);
     }
-    this.outlineLayer.replaceChildren(...nodes);
+    this.outlineLayer.append(...nodes);
+    this.pruneNodes(this.outlineNodes, seen);
   }
 
   /* ---------------------------------------------------------------- */

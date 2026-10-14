@@ -149,6 +149,18 @@ async function main() {
   const count2 = await page.evaluate(() => window.__lpo.state.polygons.length);
   check('polygon closed by clicking the first vertex', count2 === 2);
 
+  // ---- A polygon can also be closed with a double-click
+  await page.mouse.click(cx + 60, cy + 60);
+  await page.mouse.click(cx + 150, cy + 60);
+  await page.mouse.dblclick(cx + 105, cy + 150);
+  const countAfterDbl = await page.evaluate(() => window.__lpo.state.polygons.length);
+  check('polygon closed by double-click', countAfterDbl === count2 + 1, `${count2} -> ${countAfterDbl}`);
+  await page.keyboard.press('Control+z');
+  check(
+    'undo removes the double-clicked polygon',
+    (await page.evaluate(() => window.__lpo.state.polygons.length)) === count2,
+  );
+
   // ---- Concave polygon via vertex editing
   await page.click('#tool-select');
   const vertexPt = await page.evaluate(() => {
@@ -181,6 +193,89 @@ async function main() {
   await page.keyboard.press('Control+Shift+z');
   const redone = await page.evaluate(() => ({ ...window.__lpo.state.polygons[0].vertices[0] }));
   check('redo re-applies the edit', Math.abs(redone.x - moved.x) < 0.001);
+
+  // ---- Escape cancels an unfinished polygon without adding one
+  const countBeforeEscape = await page.evaluate(() => window.__lpo.state.polygons.length);
+  await page.click('#tool-draw');
+  await page.mouse.click(cx - 60, cy + 60);
+  await page.mouse.click(cx - 10, cy + 60);
+  await page.keyboard.press('Escape');
+  const escaped = await page.evaluate(() => ({
+    drawing: window.__lpo.state.drawing,
+    count: window.__lpo.state.polygons.length,
+  }));
+  check('Escape cancels an unfinished polygon', escaped.drawing === null && escaped.count === countBeforeEscape);
+
+  // ---- Drag the interior to move a whole polygon
+  await page.click('#tool-select');
+  const interior = await page.evaluate(() => {
+    const { state } = window.__lpo;
+    const polygon = state.polygons[1];
+    const c = polygon.vertices.reduce((acc, v) => ({ x: acc.x + v.x / polygon.vertices.length, y: acc.y + v.y / polygon.vertices.length }), { x: 0, y: 0 });
+    state.selection = [polygon.id];
+    window.__lpo.render();
+    window.__lpo.renderPanel();
+    const rect = document.getElementById('stage').getBoundingClientRect();
+    return {
+      x: rect.left + c.x * state.view.scale + state.view.tx,
+      y: rect.top + c.y * state.view.scale + state.view.ty,
+      before: JSON.stringify(polygon.vertices),
+    };
+  });
+  await page.mouse.move(interior.x, interior.y);
+  await page.mouse.down();
+  await page.mouse.move(interior.x + 55, interior.y + 35, { steps: 6 });
+  await page.mouse.up();
+  const movedPolygon = await page.evaluate(() => JSON.stringify(window.__lpo.state.polygons[1].vertices));
+  check('dragging the interior moves the whole polygon', movedPolygon !== interior.before);
+  await page.keyboard.press('Control+z');
+  check(
+    'undo restores a moved polygon',
+    (await page.evaluate(() => JSON.stringify(window.__lpo.state.polygons[1].vertices))) === interior.before,
+  );
+
+  // ---- Double-click an edge to insert a vertex
+  const edgePoint = await page.evaluate(() => {
+    const { state } = window.__lpo;
+    const polygon = state.polygons[0];
+    state.selection = [polygon.id];
+    window.__lpo.render();
+    window.__lpo.renderPanel();
+    const a = polygon.vertices[0];
+    const b = polygon.vertices[1];
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const rect = document.getElementById('stage').getBoundingClientRect();
+    return {
+      x: rect.left + mid.x * state.view.scale + state.view.tx,
+      y: rect.top + mid.y * state.view.scale + state.view.ty,
+      count: polygon.vertices.length,
+    };
+  });
+  await page.mouse.dblclick(edgePoint.x, edgePoint.y);
+  const insertedCount = await page.evaluate(() => window.__lpo.state.polygons[0].vertices.length);
+  check('double-clicking an edge inserts a vertex', insertedCount === edgePoint.count + 1, `${edgePoint.count} -> ${insertedCount}`);
+
+  // ---- Delete a single vertex
+  await page.evaluate(() => {
+    const polygon = window.__lpo.state.polygons[0];
+    window.__lpo.state.selection = [polygon.id];
+    window.__lpo.state.selectedVertex = { polygonId: polygon.id, index: 0 };
+    window.__lpo.render();
+    window.__lpo.renderPanel();
+  });
+  await page.keyboard.press('Delete');
+  const deletedVertexCount = await page.evaluate(() => window.__lpo.state.polygons[0].vertices.length);
+  check('Delete removes the selected vertex without deleting the polygon', deletedVertexCount === insertedCount - 1);
+
+  // The mandatory >= 3 vertex rule is enforced.
+  await page.evaluate(() => {
+    const polygon = window.__lpo.state.polygons[0];
+    window.__lpo.state.selection = [polygon.id];
+    window.__lpo.state.selectedVertex = { polygonId: polygon.id, index: 0 };
+  });
+  await page.keyboard.press('Delete');
+  const guardedCount = await page.evaluate(() => window.__lpo.state.polygons[0].vertices.length);
+  check('a polygon can never drop below 3 vertices', guardedCount === 3 && deletedVertexCount === 3);
 
   // ---- Coordinate invariance under zoom / fit / resize
   const geomBefore = await page.evaluate(() => JSON.stringify(window.__lpo.state.polygons));

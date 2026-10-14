@@ -369,16 +369,16 @@ function deleteSelected() {
         setStatus('A polygon must keep at least 3 vertices', 'error');
         return;
       }
-      recordHistory();
-      polygon.vertices.splice(index, 1);
-      state.selectedVertex = null;
-      if (!isSimplePolygon(polygon.vertices)) {
-        // Reverse if the removal broke the shape.
-        history.undo(snapshot());
-        render();
+      // Validate a copy first so an invalid removal never touches the real
+      // geometry or the undo stacks.
+      const candidate = polygon.vertices.filter((_, i) => i !== index);
+      if (!isSimplePolygon(candidate)) {
         setStatus('That vertex cannot be removed — it would break the polygon', 'error');
         return;
       }
+      recordHistory();
+      polygon.vertices = candidate;
+      state.selectedVertex = null;
       render();
       renderPanel();
       setStatus('Vertex deleted', 'ok');
@@ -428,6 +428,23 @@ function reorderSelection(mode) {
 
 let panState = null;
 
+// Double-click detection is done here rather than with the browser's `dblclick`
+// event: rendering replaces DOM nodes between the two clicks, which makes some
+// browsers suppress the synthetic event entirely. A time + distance test on
+// consecutive presses is deterministic everywhere.
+let lastPress = { time: 0, x: 0, y: 0 };
+const DOUBLE_PRESS_MS = 320;
+const DOUBLE_PRESS_PX = 6;
+
+function isDoublePress(screen) {
+  const now = performance.now();
+  const isDouble =
+    now - lastPress.time < DOUBLE_PRESS_MS &&
+    Math.hypot(screen.x - lastPress.x, screen.y - lastPress.y) < DOUBLE_PRESS_PX;
+  lastPress = { time: now, x: screen.x, y: screen.y };
+  return isDouble;
+}
+
 function pointerDown(event) {
   if (!state.image) {
     if (event.button === 0) els['file-input'].click();
@@ -447,8 +464,10 @@ function pointerDown(event) {
 
   if (event.button !== 0) return;
 
+  const doublePress = isDoublePress(screen);
+
   if (state.tool === 'draw') {
-    handleDrawClick(imagePoint, screen, event);
+    handleDrawClick(imagePoint, screen, { doublePress });
     return;
   }
 
@@ -458,15 +477,21 @@ function pointerDown(event) {
   }
 
   if (state.tool === 'select') {
-    handleSelectPress(imagePoint, screen, event);
+    handleSelectPress(imagePoint, screen, event, { doublePress });
   }
 }
 
-function handleDrawClick(imagePoint, screen) {
+function handleDrawClick(imagePoint, screen, options = {}) {
   if (!state.drawing) {
     state.drawing = { vertices: [{ ...imagePoint }] };
     setStatus('Click to add vertices · click the first point, double-click or press Enter to close · Esc cancels');
     render();
+    return;
+  }
+
+  // Double-click closes the polygon.
+  if (options.doublePress && state.drawing.vertices.length >= 3) {
+    finishDrawing();
     return;
   }
 
@@ -489,8 +514,19 @@ function handleDrawClick(imagePoint, screen) {
   render();
 }
 
-function handleSelectPress(imagePoint, screen, event) {
+function handleSelectPress(imagePoint, screen, event, options = {}) {
   const additive = event.shiftKey;
+
+  // 0) Double-clicking an edge inserts a vertex there (a double-click on an
+  //    existing vertex is ignored so we never create a degenerate sliver).
+  if (options.doublePress) {
+    if (hitTestVertex(imagePoint)) return;
+    const edgeHit = hitTestEdge(imagePoint, null);
+    if (edgeHit) {
+      insertVertex(edgeHit.polygonId, edgeHit.index, imagePoint);
+      return;
+    }
+  }
 
   // 1) Vertex drag on a selected polygon.
   const vertexHit = hitTestVertex(imagePoint);
@@ -502,32 +538,24 @@ function handleSelectPress(imagePoint, screen, event) {
       polygonId: vertexHit.polygonId,
       index: vertexHit.index,
       recorded: false,
+      start: { ...imagePoint },
     };
     render();
     renderPanel();
     return;
   }
 
-  // 2) Vertex insertion when double-clicking an edge.
-  if (event.detail === 2) {
-    const edgeHit = hitTestEdge(imagePoint, null);
-    if (edgeHit) {
-      insertVertex(edgeHit.polygonId, edgeHit.index, imagePoint);
-      return;
-    }
-  }
-
-  // 3) Polygon body: select and prepare to move.
+  // 2) Polygon body: select and prepare to move.
   const polygon = renderer.hitTestPolygons(state.polygons, imagePoint);
   if (polygon) {
     if (!state.selection.includes(polygon.id)) selectPolygon(polygon.id, additive);
     state.selectedVertex = null;
-    state.drag = { type: 'move', polygonId: polygon.id, recorded: false, additive };
+    state.drag = { type: 'move', polygonId: polygon.id, recorded: false, additive, start: { ...imagePoint } };
     render();
     return;
   }
 
-  // 4) Empty space clears the selection.
+  // 3) Empty space clears the selection.
   if (!additive) selectPolygon(null);
 }
 
@@ -569,8 +597,15 @@ function insertVertex(polygonId, edgeIndex, imagePoint) {
   if (!polygon) return;
   const edge = closestPointOnSegment(imagePoint, polygon.vertices[edgeIndex], polygon.vertices[(edgeIndex + 1) % polygon.vertices.length]);
 
+  const candidate = polygon.vertices.slice();
+  candidate.splice(edgeIndex + 1, 0, { x: edge.point.x, y: edge.point.y });
+  if (!isSimplePolygon(candidate)) {
+    setStatus('A vertex cannot be added there — it would make the polygon invalid', 'error');
+    return;
+  }
+
   recordHistory();
-  polygon.vertices.splice(edgeIndex + 1, 0, { x: edge.point.x, y: edge.point.y });
+  polygon.vertices = candidate;
   state.selection = [polygonId];
   state.selectedVertex = { polygonId, index: edgeIndex + 1 };
   render();
@@ -620,6 +655,13 @@ function applyDrag(imagePoint) {
   const polygon = state.polygons.find((p) => p.id === drag.polygonId);
   if (!polygon) return;
 
+  // Ignore sub-threshold movement so a click to select never nudges geometry.
+  if (!drag.recorded) {
+    const start = drag.start || imagePoint;
+    const moved = Math.hypot(imagePoint.x - start.x, imagePoint.y - start.y) * state.view.scale;
+    if (moved < 3) return;
+  }
+
   if (!drag.recorded) {
     recordHistory();
     drag.recorded = true;
@@ -629,18 +671,14 @@ function applyDrag(imagePoint) {
     }
   }
 
-  if (drag.type === 'vertex') {
-    const original = drag.originalVertices;
-    const base = original[drag.index];
-    const prevIndex = (drag.index - 1 + original.length) % original.length;
-    polygon.vertices[drag.index] = { x: imagePoint.x, y: imagePoint.y };
-    // Guard against the drag creating a self-intersection.
-    if (!isSimplePolygon(polygon.vertices) || Math.abs(polygonArea(polygon.vertices)) < 0.5) {
-      polygon.vertices[drag.index] = { ...base };
-    } else {
-      drag.position = { x: imagePoint.x, y: imagePoint.y };
-    }
-    void prevIndex;
+  if (drag.type === 'vertex') {      const base = drag.originalVertices[drag.index];
+      polygon.vertices[drag.index] = { x: imagePoint.x, y: imagePoint.y };
+      // Guard against the drag creating a self-intersection.
+      if (!isSimplePolygon(polygon.vertices) || Math.abs(polygonArea(polygon.vertices)) < 0.5) {
+        polygon.vertices[drag.index] = { ...base };
+      } else {
+        drag.position = { x: imagePoint.x, y: imagePoint.y };
+      }
   } else if (drag.type === 'move') {
     const delta = { x: imagePoint.x - drag.last.x, y: imagePoint.y - drag.last.y };
     drag.last = { ...imagePoint };
@@ -668,13 +706,6 @@ function pointerUp(event) {
     render();
   }
   els.stage.releasePointerCapture?.(event.pointerId);
-}
-
-function pointerDoubleClick(event) {
-  if (state.tool === 'draw' && state.drawing && state.drawing.vertices.length >= 3) {
-    finishDrawing();
-  }
-  void event;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1483,7 +1514,6 @@ function bindStage() {
   els.stage.addEventListener('pointermove', pointerMove);
   els.stage.addEventListener('pointerup', pointerUp);
   els.stage.addEventListener('pointercancel', pointerUp);
-  els.stage.addEventListener('dblclick', pointerDoubleClick);
   els.stage.addEventListener('contextmenu', (event) => {
     if (state.tool === 'eyedropper') {
       event.preventDefault();
