@@ -11,6 +11,7 @@ import {
   getPixel,
   compositeOver,
   sampleComposite,
+  extractTile,
 } from '../src/sampling.js';
 
 function makeImageData(width, height, fill) {
@@ -124,6 +125,48 @@ test('getPixel clamps to image bounds', () => {
   assert.deepEqual(getPixel(image, 0, 0), { r: 0, g: 0, b: 0, a: 255 });
   assert.deepEqual(getPixel(image, 1, 1), { r: 10, g: 10, b: 0, a: 255 });
   assert.deepEqual(getPixel(image, 99, 99), { r: 10, g: 10, b: 0, a: 255 });
+});
+
+test('extractTile copies the requested block centred on the point', () => {
+  // Distinct red value per column so the block position is verifiable.
+  const image = makeImageData(16, 16, (x, y) => ({ r: x, g: y, b: 0 }));
+
+  const tile = extractTile(image, 8, 8, 4, 4);
+  assert.equal(tile.width, 4);
+  assert.equal(tile.height, 4);
+  // Centred on 8 -> columns 6..9, rows 6..9.
+  assert.equal(tile.sourceX, 6);
+  assert.equal(tile.sourceY, 6);
+  assert.equal(tile.data[0], 6); // r of the top-left pixel
+  assert.equal(tile.data[1], 6); // g of the top-left pixel
+  assert.equal(tile.data[3], 255); // alpha preserved
+  const last = (3 * 4 + 3) * 4;
+  assert.equal(tile.data[last], 9);
+  assert.equal(tile.data[last + 1], 9);
+});
+
+test('extractTile clamps to the image edge and keeps the requested size', () => {
+  const image = makeImageData(8, 8, (x, y) => ({ r: x, g: y, b: 0 }));
+  const tile = extractTile(image, 1, 1, 5, 5);
+
+  assert.equal(tile.width, 5);
+  assert.equal(tile.height, 5);
+  assert.equal(tile.sourceX, -1);
+  assert.equal(tile.data.length, 25 * 4);
+  // Every pixel is present and read from the clamped edge (row 0 / column 0).
+  assert.equal(tile.data[0], 0);
+  assert.equal(tile.data[1], 0);
+  assert.equal(tile.data[3], 255);
+});
+
+test('extractTile returns null without pixel data and handles degenerate sizes', () => {
+  assert.equal(extractTile(null, 0, 0, 5, 5), null);
+  assert.equal(extractTile({ data: new Uint8ClampedArray(0), width: 0, height: 0 }, 0, 0, 5, 5), null);
+
+  const image = makeImageData(4, 4, () => ({ r: 1, g: 2, b: 3 }));
+  const single = extractTile(image, 0, 0, 0, -3);
+  assert.equal(single.width, 1);
+  assert.equal(single.height, 1);
 });
 
 test('compositeOver blends source over destination', () => {

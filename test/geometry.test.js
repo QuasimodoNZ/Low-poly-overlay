@@ -16,6 +16,7 @@ import {
   segmentsIntersect,
   pointInTriangle,
   ensureCounterClockwise,
+  findNearestVertex,
 } from '../src/geometry.js';
 
 const square = [
@@ -165,6 +166,30 @@ test('subdividePolygon keeps faces inside and sums to the polygon area', () => {
     }
     assert.ok(Math.abs(total - Math.abs(polygonArea(lShape))) < 1e-6, 'no gaps or overlaps');
   }
+});
+
+test('findNearestVertex picks the closest vertex inside the radius', () => {
+  const groups = [{ vertices: square }];
+
+  const hit = findNearestVertex({ x: 9, y: 9 }, groups, 2.5);
+  assert.deepEqual(hit.point, { x: 10, y: 10 });
+  assert.equal(hit.index, 2);
+  assert.equal(hit.distance, Math.hypot(1, 1));
+
+  // Out of range -> no snap.
+  assert.equal(findNearestVertex({ x: 5, y: 5 }, groups, 2.5), null);
+  assert.equal(findNearestVertex({ x: 5, y: 5 }, groups, 0), null);
+});
+
+test('findNearestVertex honours exclusions and prefers the nearer group', () => {
+  const groups = [
+    { vertices: [{ x: 0, y: 0 }], ref: 'a' },
+    { vertices: [{ x: 1, y: 0 }], ref: 'b' },
+  ];
+  assert.equal(findNearestVertex({ x: 0.9, y: 0 }, groups, 5).ref, 'b');
+
+  const excluded = [{ vertices: [{ x: 1, y: 0 }], excludeIndices: new Set([0]) }];
+  assert.equal(findNearestVertex({ x: 1, y: 0 }, excluded, 5), null);
 });
 
 test('closestPointOnSegment and closestEdge', () => {

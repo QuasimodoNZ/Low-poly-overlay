@@ -68,6 +68,9 @@ async function main() {
     if (msg.type() === 'error') consoleErrors.push(msg.text());
   });
   page.on('pageerror', (error) => consoleErrors.push(`pageerror: ${error.message}`));
+  // Imports ask for confirmation when artwork already exists; accept so the
+  // scripted flow never stalls on a native dialog.
+  page.on('dialog', (dialog) => dialog.accept());
 
   const results = [];
   const check = (label, condition, detail = '') => {
@@ -453,6 +456,311 @@ async function main() {
   }));
   check('project reload restores polygons and image', reloaded.polys === polygonCountBefore && reloaded.hasImage);
   check('project reload restores colours', reloaded.fills.every((f) => /^#[0-9a-f]{6}$/.test(f)));
+
+  // ---- Vertex snapping ------------------------------------------------
+  // Close the export modal left open above (its overlay would swallow pointer
+  // events) and return to the select tool, which the eyedropper test left active.
+  await page.click('#btn-export-close');
+  await page.click('#tool-select');
+  await page.evaluate(() => {
+    const { state, render, renderPanel } = window.__lpo;
+    const face = (id, x) => ({
+      id,
+      vertices: [
+        { x, y: 10 },
+        { x: x + 20, y: 10 },
+        { x: x + 20, y: 30 },
+        { x, y: 30 },
+      ],
+      fill: '#8a8f98',
+      opacity: 1,
+      visible: true,
+      texture: null,
+    });
+    state.polygons = [face('snap-a', 10), face('snap-b', 35)];
+    state.selection = ['snap-b'];
+    render();
+    renderPanel();
+  });
+
+  const screenOf = (polygonIndex, vertexIndex) =>
+    page.evaluate(
+      ([pi, vi]) => {
+        const { state } = window.__lpo;
+        const v = state.polygons[pi].vertices[vi];
+        const rect = document.getElementById('stage').getBoundingClientRect();
+        return { x: rect.left + v.x * state.view.scale + state.view.tx, y: rect.top + v.y * state.view.scale + state.view.ty };
+      },
+      [polygonIndex, vertexIndex],
+    );
+
+  // Dragging a vertex so it lands a few screen px from another polygon's vertex
+  // must lock it exactly onto that vertex.
+  const targetScreen = await screenOf(0, 2); // snap-a's (30, 30)
+  const grabScreen = await screenOf(1, 3); // snap-b's (35, 30)
+  await page.mouse.move(grabScreen.x, grabScreen.y);
+  await page.mouse.down();
+  await page.mouse.move(targetScreen.x + 4, targetScreen.y + 3, { steps: 6 });
+  const snapIndicator = await page.evaluate(() => document.querySelectorAll('.snap-target').length);
+  check('snap indicator shows the vertex being locked onto', snapIndicator === 1, String(snapIndicator));
+  await page.mouse.up();
+  const snappedVertex = await page.evaluate(() => window.__lpo.state.polygons[1].vertices[3]);
+  check(
+    'dragging a vertex snaps it exactly onto a neighbouring vertex',
+    Math.abs(snappedVertex.x - 30) < 1e-6 && Math.abs(snappedVertex.y - 30) < 1e-6,
+    JSON.stringify(snappedVertex),
+  );
+
+  // Shift bypasses snapping for that edit, so the point stays where it was put.
+  await page.keyboard.press('Control+z');
+  await page.mouse.move(grabScreen.x, grabScreen.y);
+  await page.keyboard.down('Shift');
+  await page.mouse.down();
+  await page.mouse.move(targetScreen.x + 4, targetScreen.y + 3, { steps: 6 });
+  const shiftIndicator = await page.evaluate(() => document.querySelectorAll('.snap-target').length);
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  const unsnappedVertex = await page.evaluate(() => window.__lpo.state.polygons[1].vertices[3]);
+  check('Shift disables snapping while dragging', shiftIndicator === 0 && Math.abs(unsnappedVertex.x - 30) > 1e-3, JSON.stringify(unsnappedVertex));
+  await page.keyboard.press('Control+z');
+
+  // Placing a vertex near an existing one snaps on click, and the toolbar button
+  // turns the behaviour off entirely.
+  await page.click('#tool-draw');
+  await page.mouse.click(targetScreen.x + 5, targetScreen.y + 4);
+  const placedVertex = await page.evaluate(() => window.__lpo.state.drawing.vertices[0]);
+  check(
+    'a clicked vertex snaps to a nearby vertex',
+    Math.abs(placedVertex.x - 30) < 1e-6 && Math.abs(placedVertex.y - 30) < 1e-6,
+    JSON.stringify(placedVertex),
+  );
+  await page.keyboard.press('Escape');
+
+  await page.click('#btn-snap');
+  await page.mouse.click(targetScreen.x + 5, targetScreen.y + 4);
+  const freeVertex = await page.evaluate(() => window.__lpo.state.drawing.vertices[0]);
+  check('the Snap button disables snapping', Math.abs(freeVertex.x - 30) > 1e-3, JSON.stringify(freeVertex));
+  await page.keyboard.press('Escape');
+  await page.click('#btn-snap');
+  check('snap toggle stays in sync with the checkbox', await page.isChecked('#chk-snap'));
+  await page.click('#tool-select');
+
+  // ---- Image-sampled texture ------------------------------------------
+  await page.evaluate(() => {
+    const { state, render, renderPanel } = window.__lpo;
+    state.polygons = [{
+      id: 'tex',
+      vertices: [
+        { x: 10, y: 10 },
+        { x: 30, y: 10 },
+        { x: 30, y: 30 },
+        { x: 10, y: 30 },
+      ],
+      fill: '#8a8f98',
+      opacity: 1,
+      visible: true,
+      texture: null,
+    }];
+    state.selection = ['tex'];
+    render();
+    renderPanel();
+  });
+  await page.fill('#texture-tile-w', '5');
+  await page.fill('#texture-tile-h', '5');
+  await page.click('#btn-texture-sample');
+  await page.waitForFunction(() => window.__lpo.state.polygons[0].texture !== null);
+
+  const textureInfo = await page.evaluate(async () => {
+    const { state } = window.__lpo;
+    const texture = state.polygons[0].texture;
+    const img = new Image();
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = texture.href;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    const got = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    // Independently rebuild the expected block straight from the source pixels.
+    const source = state.image.imageData;
+    const left = Math.round(texture.anchor.x - texture.tileWidth / 2);
+    const top = Math.round(texture.anchor.y - texture.tileHeight / 2);
+    let matches = 0;
+    let total = 0;
+    for (let y = 0; y < texture.tileHeight; y++) {
+      for (let x = 0; x < texture.tileWidth; x++) {
+        const sx = Math.min(source.width - 1, Math.max(0, left + x));
+        const sy = Math.min(source.height - 1, Math.max(0, top + y));
+        const s = (sy * source.width + sx) * 4;
+        const d = (y * texture.tileWidth + x) * 4;
+        total += 1;
+        if (got.data[d] === source.data[s] && got.data[d + 1] === source.data[s + 1] && got.data[d + 2] === source.data[s + 2]) {
+          matches += 1;
+        }
+      }
+    }
+
+    return {
+      mode: texture.mode,
+      tileWidth: texture.tileWidth,
+      tileHeight: texture.tileHeight,
+      href: texture.href,
+      anchor: { ...texture.anchor },
+      decodedWidth: img.naturalWidth,
+      decodedHeight: img.naturalHeight,
+      matches,
+      total,
+      firstPixel: [got.data[0], got.data[1], got.data[2]],
+    };
+  });
+
+  check(
+    'sampled texture records the requested tile size',
+    textureInfo.mode === 'sample' && textureInfo.tileWidth === 5 && textureInfo.tileHeight === 5,
+    JSON.stringify(textureInfo.mode),
+  );
+  check('sampled texture is a PNG data URL', /^data:image\/png;base64,/.test(textureInfo.href));
+  check('the tile decodes to exactly the requested pixel grid', textureInfo.decodedWidth === 5 && textureInfo.decodedHeight === 5);
+  check(
+    'the tile is the exact pixel block from under the polygon',
+    textureInfo.matches === textureInfo.total,
+    `${textureInfo.matches}/${textureInfo.total}`,
+  );
+  check('the tile is grabbed from the polygon centre', Math.abs(textureInfo.anchor.x - 20) < 0.5 && Math.abs(textureInfo.anchor.y - 20) < 0.5, JSON.stringify(textureInfo.anchor));
+  check('the tile carries the colour under the polygon', textureInfo.firstPixel[0] > 200 && textureInfo.firstPixel[2] < 60, textureInfo.firstPixel.join(','));
+
+  const textureRender = await page.evaluate(() => {
+    const node = document.querySelector('#polygon-layer polygon');
+    return { fill: node.getAttribute('fill'), patterns: document.querySelectorAll('#svg-defs pattern').length };
+  });
+  check('the polygon renders with the tiled pattern', /^url\(#tex/.test(textureRender.fill) && textureRender.patterns >= 1, JSON.stringify(textureRender));
+
+  // Move the polygon so its centre lands over the other half of the image: the
+  // tile must follow the polygon and pick up the new pixels underneath it.
+  await page.evaluate(() => {
+    window.__lpo.state.polygons[0].vertices = window.__lpo.state.polygons[0].vertices.map((v) => ({ x: v.x + 20, y: v.y + 20 }));
+    window.__lpo.render();
+  });
+  const beforeResample = await page.evaluate(() => window.__lpo.state.polygons[0].texture.href);
+  await page.click('#btn-texture-sample');
+  // Re-sampling is async (the tile is decoded for PNG export), so wait for the
+  // new anchor rather than reading immediately.
+  await page.waitForFunction(() => Math.abs(window.__lpo.state.polygons[0].texture.anchor.x - 40) < 0.5);
+  const resampled = await page.evaluate(() => ({
+    href: window.__lpo.state.polygons[0].texture.href,
+    anchor: { ...window.__lpo.state.polygons[0].texture.anchor },
+  }));
+  check(
+    're-sampling follows the polygon (new centre, new pixels)',
+    Math.abs(resampled.anchor.x - 40) < 0.5 && resampled.href !== beforeResample,
+    JSON.stringify(resampled.anchor),
+  );
+
+  await page.click('#btn-export');
+  const texturedSvg = await grabDownload('#btn-export-svg');
+  const texturedSvgText = await readFileAsync(texturedSvg, 'utf8');
+  check('sampled textures survive SVG export as patterns', texturedSvgText.includes('<pattern') && /fill="url\(#tex/.test(texturedSvgText));
+  await page.click('#btn-export-close');
+
+  await page.click('#btn-texture-clear');
+  check('the texture can be cleared', (await page.evaluate(() => window.__lpo.state.polygons[0].texture)) === null);
+
+  // ---- Gradient removal: a tiny tile omits large-scale shading ---------
+  const gradientUrl = await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    for (let x = 0; x < 64; x++) {
+      const v = Math.round((x / 63) * 255);
+      ctx.fillStyle = `rgb(${v},${v},${v})`;
+      ctx.fillRect(x, 0, 1, 64);
+    }
+    return canvas.toDataURL('image/png');
+  });
+  await page.setInputFiles('#file-input', {
+    name: 'gradient.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from(gradientUrl.split(',')[1], 'base64'),
+  });
+  await page.waitForFunction(() => window.__lpo.state.image?.name === 'gradient.png');
+  await page.evaluate(() => {
+    const { state, render, renderPanel } = window.__lpo;
+    state.polygons = [{
+      id: 'grad',
+      vertices: [
+        { x: 4, y: 20 },
+        { x: 60, y: 20 },
+        { x: 60, y: 44 },
+        { x: 4, y: 44 },
+      ],
+      fill: '#8a8f98',
+      opacity: 1,
+      visible: true,
+      texture: null,
+    }];
+    state.selection = ['grad'];
+    render();
+    renderPanel();
+  });
+  await page.fill('#texture-tile-w', '9');
+  await page.fill('#texture-tile-h', '9');
+  await page.click('#btn-texture-sample');
+  await page.waitForFunction(() => window.__lpo.state.polygons[0].texture?.tileWidth === 9);
+
+  const gradientResult = await page.evaluate(async () => {
+    const { state } = window.__lpo;
+    const texture = state.polygons[0].texture;
+    const img = new Image();
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = texture.href;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    const tile = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let tileMin = 255;
+    let tileMax = 0;
+    for (let i = 0; i < tile.length; i += 4) {
+      tileMin = Math.min(tileMin, tile[i]);
+      tileMax = Math.max(tileMax, tile[i]);
+    }
+
+    // Range of the source pixels the polygon actually covers (the gradient is
+    // horizontal, so sampling one row across the polygon's x span is exact).
+    const source = state.image.imageData;
+    const xs = state.polygons[0].vertices.map((v) => v.x);
+    const row = Math.round(state.polygons[0].texture.anchor.y);
+    let srcMin = 255;
+    let srcMax = 0;
+    for (let x = Math.max(0, Math.floor(Math.min(...xs))); x <= Math.min(source.width - 1, Math.ceil(Math.max(...xs))); x++) {
+      const value = source.data[(row * source.width + x) * 4];
+      srcMin = Math.min(srcMin, value);
+      srcMax = Math.max(srcMax, value);
+    }
+
+    return {
+      tileRange: tileMax - tileMin,
+      sourceRange: srcMax - srcMin,
+      tileSize: texture.tileWidth,
+    };
+  });
+  check(
+    'the sampled tile drops the large-scale gradient',
+    gradientResult.sourceRange > 150 &&
+      gradientResult.tileRange > 0 &&
+      gradientResult.tileRange < gradientResult.sourceRange * 0.4,
+    JSON.stringify(gradientResult),
+  );
 
   check('no console errors during the whole session', consoleErrors.length === 0, consoleErrors.join(' | '));
 

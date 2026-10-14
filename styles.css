@@ -276,6 +276,15 @@ body {
   pointer-events: none;
 }
 
+/* Ring drawn over the vertex a placed/dragged point would snap onto. */
+.snap-target {
+  fill: none;
+  stroke: #ffd166;
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+  pointer-events: none;
+}
+
 /* ------------------------------------------------------------------ */
 /* Magnifier                                                          */
 /* ------------------------------------------------------------------ */

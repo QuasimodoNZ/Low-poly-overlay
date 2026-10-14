@@ -39,9 +39,38 @@ export function clonePolygon(polygon) {
   return {
     ...polygon,
     vertices: polygon.vertices.map((p) => ({ x: p.x, y: p.y })),
-    texture: polygon.texture ? { ...polygon.texture } : null,
+    texture: cloneTexture(polygon.texture),
     meta: polygon.meta ? structuredCloneSafe(polygon.meta) : {},
   };
+}
+
+/**
+ * Copy a texture without touching its decoded `image` (an HTMLImageElement,
+ * which structuredClone cannot handle but which never needs duplicating).
+ */
+export function cloneTexture(texture) {
+  if (!texture) return null;
+  return {
+    ...texture,
+    anchor: texture.anchor ? { x: texture.anchor.x, y: texture.anchor.y } : undefined,
+  };
+}
+
+/**
+ * Top-left corner of one texture tile, in image coordinates.
+ *
+ * Textures sampled from the image carry an `anchor` (the polygon centroid) and
+ * are positioned so the tile stays centred on it however the scale changes.
+ * File textures position themselves from their explicit offsets instead.
+ */
+export function textureOrigin(texture, scaleOverride) {
+  const scale = scaleOverride === undefined ? texture.scale || 1 : scaleOverride;
+  if (texture.anchor) {
+    const width = Math.max(1, texture.width || 1) * scale;
+    const height = Math.max(1, texture.height || 1) * scale;
+    return { x: texture.anchor.x - width / 2, y: texture.anchor.y - height / 2 };
+  }
+  return { x: texture.offsetX || 0, y: texture.offsetY || 0 };
 }
 
 export function clonePolygons(polygons) {
@@ -66,6 +95,7 @@ export function createDefaultSettings() {
     highlightSelection: true,
     overlayOpacity: 1, // global multiplier applied to polygon alpha
     backgroundVisible: true,
+    snapVertices: true, // snap placed/dragged vertices to nearby vertices
   };
 }
 
@@ -89,9 +119,20 @@ export function serializePolygons(polygons) {
     opacity: p.opacity,
     visible: p.visible,
     name: p.name,
-    texture: p.texture ? { ...p.texture } : null,
+    texture: serializeTexture(p.texture),
     meta: p.meta || {},
   }));
+}
+
+/**
+ * Textures are serialised without their decoded `image` element (which cannot be
+ * stringified); it is rebuilt from `href` when the project is loaded.
+ */
+function serializeTexture(texture) {
+  if (!texture) return null;
+  const { image, ...rest } = texture;
+  void image;
+  return rest;
 }
 
 function round(value) {

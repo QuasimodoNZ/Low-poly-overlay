@@ -11,6 +11,7 @@
  */
 
 import { pointInPolygon } from './geometry.js';
+import { textureOrigin } from './model.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 export const HANDLE_RADIUS = 5;
@@ -110,7 +111,8 @@ export class Renderer {
     if (!texture || !texture.href) return null;
 
     const scale = texture.scale || 1;
-    const key = `${texture.href}|${scale}|${texture.offsetX || 0}|${texture.offsetY || 0}`;
+    const origin = textureOrigin(texture, scale);
+    const key = `${texture.href}|${scale}|${origin.x}|${origin.y}`;
     if (this.patternIds.has(key)) return this.patternIds.get(key);
 
     const id = `tex-${this.patternIds.size + 1}`;
@@ -122,7 +124,7 @@ export class Renderer {
       patternUnits: 'userSpaceOnUse',
       width,
       height,
-      patternTransform: `translate(${texture.offsetX || 0} ${texture.offsetY || 0})`,
+      patternTransform: `translate(${origin.x} ${origin.y})`,
     });
     pattern.append(
       el('image', {
@@ -336,6 +338,7 @@ export class Renderer {
       hoverVertex = null,
       hoverEdge = null,
       drawing = null,
+      snapTarget = null,
     } = options;
     const selected = new Set(selection);
     const nodes = [];
@@ -375,6 +378,20 @@ export class Renderer {
           );
         });
       }
+    }
+
+    // Snap indicator: a dashed ring over the vertex the next point would lock
+    // onto, so snapping is always visible rather than silent.
+    if (snapTarget) {
+      const screen = toScreen(snapTarget);
+      nodes.push(
+        el('circle', {
+          cx: screen.x,
+          cy: screen.y,
+          r: HANDLE_RADIUS + 5,
+          class: 'snap-target',
+        }),
+      );
     }
 
     if (hoverEdge && hoverEdge.point) {

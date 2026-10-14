@@ -22,6 +22,15 @@
         </div>
 
         <div class="toolbar-group">
+          <button
+            id="btn-snap"
+            class="tool-btn"
+            aria-pressed="true"
+            title="Snap vertices to nearby vertices — hold Shift while placing to bypass"
+          ><span class="icon">⌗</span>Snap</button>
+        </div>
+
+        <div class="toolbar-group">
           <button id="btn-undo" class="icon-btn" title="Undo (Ctrl/Cmd+Z)">↶</button>
           <button id="btn-redo" class="icon-btn" title="Redo (Ctrl/Cmd+Shift+Z)">↷</button>
         </div>
@@ -75,6 +84,9 @@
               >
               <label class="switch"
                 ><input id="chk-highlight" type="checkbox" checked /><span>Highlight selected polygon</span></label
+              >
+              <label class="switch"
+                ><input id="chk-snap" type="checkbox" checked /><span>Snap vertices to nearby vertices (hold Shift to bypass)</span></label
               >
               <div class="field-row">
                 <label for="outline-color">Outline colour</label>
@@ -162,7 +174,28 @@
                   <button id="btn-subdiv-cancel" class="btn">Cancel</button>
                 </div>
 
-                <h3>Texture (optional)</h3>
+                <h3>Texture</h3>
+                <p class="hint">
+                  <strong>Sample from image</strong> grabs a small block of pixels from the centre of the polygon and repeats it
+                  across the shape. Because the block is tiny, lighting gradients, folds and other large-scale detail drop out while
+                  the surface's fine weave stays.
+                </p>
+                <div class="field-row rgb-row">
+                  <label for="texture-tile-w">Tile</label>
+                  <input id="texture-tile-w" type="number" min="1" max="256" step="1" value="5" />
+                  <span class="value">×</span>
+                  <input id="texture-tile-h" type="number" min="1" max="256" step="1" value="5" />
+                  <span class="value">px</span>
+                </div>
+                <div class="button-row">
+                  <button id="btn-texture-sample" class="btn primary" title="Repeat a tile sampled from under the polygon">
+                    Sample from image
+                  </button>
+                  <button id="btn-texture-load" class="btn">Load file</button>
+                  <button id="btn-texture-clear" class="btn" disabled>Clear</button>
+                  <input id="texture-input" type="file" accept="image/*" hidden />
+                </div>
+                <p id="texture-info" class="hint">No texture.</p>
                 <div class="field-row">
                   <label for="texture-scale">Scale</label>
                   <input id="texture-scale" type="range" min="0.1" max="8" step="0.05" value="1" disabled />
@@ -172,11 +205,6 @@
                   <label>Offset</label>
                   <input id="texture-offset-x" type="number" step="1" value="0" disabled />
                   <input id="texture-offset-y" type="number" step="1" value="0" disabled />
-                </div>
-                <div class="button-row">
-                  <button id="btn-texture-load" class="btn">Load texture</button>
-                  <button id="btn-texture-clear" class="btn" disabled>Clear</button>
-                  <input id="texture-input" type="file" accept="image/*" hidden />
                 </div>
               </div>
             </section>
@@ -219,6 +247,8 @@
             <tr><td>Click first point / double-click / Enter</td><td>Close the polygon</td></tr>
             <tr><td>Esc</td><td>Cancel drawing, clear selection, cancel eyedropper</td></tr>
             <tr><td>Drag vertex</td><td>Reshape the selected polygon</td></tr>
+            <tr><td>Snap</td><td>Placed and dragged vertices snap to nearby vertices (toggle with the Snap button)</td></tr>
+            <tr><td>Shift while placing / dragging</td><td>Temporarily bypass vertex snapping</td></tr>
             <tr><td>Drag interior</td><td>Move the polygon</td></tr>
             <tr><td>Double-click an edge</td><td>Insert a vertex</td></tr>
             <tr><td>Delete / Backspace</td><td>Delete selected vertex, else polygon</td></tr>
@@ -232,6 +262,11 @@
           <p class="hint">
             Colour sampling always reads the <strong>original</strong> image, never the overlay. Drag &amp; drop an image
             or a saved project file onto the canvas to open it.
+          </p>
+          <p class="hint">
+            <strong>Textures:</strong> “Sample from image” repeats a small tile of the pixels under the polygon across it, which
+            strips out lighting gradients and folds while keeping the surface's weave. Use a 3–8 px tile for fabric; larger tiles
+            keep more of the original shading. “Load file” tiles an external image instead.
           </p>
         </div>
       </div>

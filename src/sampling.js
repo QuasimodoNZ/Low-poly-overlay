@@ -214,6 +214,52 @@ export function getPixel(imageData, x, y) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Tile sampling (used by the image-sampled texture mode)             */
+/* ------------------------------------------------------------------ */
+
+function clampIndex(value, size) {
+  return Math.min(size - 1, Math.max(0, value));
+}
+
+/**
+ * Copy a `tileWidth × tileHeight` pixel block out of an image, centred on
+ * `(centerX, centerY)`.
+ *
+ * Sampling outside the image clamps to the nearest edge pixel, so the tile
+ * always has exactly the requested size and never contains undefined pixels.
+ * The result is `{ data, width, height, sourceX, sourceY }` where `data` is an
+ * RGBA `Uint8ClampedArray` laid out like a canvas `ImageData`.
+ */
+export function extractTile(imageData, centerX, centerY, tileWidth, tileHeight) {
+  const { data, width, height } = imageData || {};
+  if (!data || width <= 0 || height <= 0) return null;
+
+  const tw = Math.max(1, Math.round(Number(tileWidth) || 1));
+  const th = Math.max(1, Math.round(Number(tileHeight) || 1));
+
+  // Top-left of the sampled block. `- tw / 2` keeps the block centred on the
+  // requested point (which is the polygon centroid for a sampled texture).
+  const sourceX = Math.round(centerX - tw / 2);
+  const sourceY = Math.round(centerY - th / 2);
+  const out = new Uint8ClampedArray(tw * th * 4);
+
+  for (let y = 0; y < th; y++) {
+    const sy = clampIndex(sourceY + y, height);
+    for (let x = 0; x < tw; x++) {
+      const sx = clampIndex(sourceX + x, width);
+      const src = (sy * width + sx) * 4;
+      const dst = (y * tw + x) * 4;
+      out[dst] = data[src];
+      out[dst + 1] = data[src + 1];
+      out[dst + 2] = data[src + 2];
+      out[dst + 3] = data[src + 3];
+    }
+  }
+
+  return { data: out, width: tw, height: th, sourceX, sourceY };
+}
+
+/* ------------------------------------------------------------------ */
 /* Composite sampling                                                 */
 /* ------------------------------------------------------------------ */
 

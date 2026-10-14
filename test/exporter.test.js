@@ -69,6 +69,80 @@ test('overlay opacity multiplies polygon opacity', () => {
   assert.match(svg, /fill-opacity="0\.25"/);
 });
 
+test('an image-sampled texture exports as a repeatable SVG pattern', () => {
+  const textured = [
+    {
+      id: 't',
+      vertices: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 100 },
+        { x: 0, y: 100 },
+      ],
+      fill: '#123456',
+      opacity: 1,
+      visible: true,
+      texture: {
+        mode: 'sample',
+        href: 'data:image/png;base64,AAAA',
+        width: 5,
+        height: 5,
+        anchor: { x: 50, y: 50 },
+        scale: 1,
+      },
+    },
+  ];
+
+  const svg = polygonsToSVGString(textured, { width: 100, height: 100 });
+  assert.match(svg, /<pattern id="tex1" patternUnits="userSpaceOnUse" width="5" height="5"/);
+  // Origin = anchor - tile / 2.
+  assert.match(svg, /patternTransform="translate\(47\.5 47\.5\)"/);
+  assert.match(svg, /<image href="data:image\/png;base64,AAAA" width="5" height="5"/);
+  assert.match(svg, /fill="url\(#tex1\)"/);
+  assert.doesNotMatch(svg, /fill="#123456"/);
+});
+
+test('scaled textures scale the tile and keep the anchor centred', () => {
+  const textured = [
+    {
+      id: 't',
+      vertices: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 100 },
+      ],
+      fill: '#123456',
+      opacity: 1,
+      visible: true,
+      texture: { mode: 'sample', href: 'data:image/png;base64,AAAA', width: 5, height: 5, anchor: { x: 50, y: 50 }, scale: 4 },
+    },
+  ];
+
+  const svg = polygonsToSVGString(textured, { width: 100, height: 100 });
+  assert.match(svg, /width="20" height="20"/);
+  assert.match(svg, /patternTransform="translate\(40 40\)"/);
+});
+
+test('identical textures share one pattern definition', () => {
+  const texture = { mode: 'sample', href: 'data:image/png;base64,AAAA', width: 5, height: 5, anchor: { x: 10, y: 10 }, scale: 1 };
+  const make = (id, x) => ({
+    id,
+    vertices: [
+      { x, y: 0 },
+      { x: x + 10, y: 0 },
+      { x: x + 10, y: 10 },
+    ],
+    fill: '#000000',
+    opacity: 1,
+    visible: true,
+    texture: { ...texture },
+  });
+
+  const svg = polygonsToSVGString([make('a', 0), make('b', 40)], { width: 100, height: 100 });
+  assert.equal((svg.match(/<pattern /g) || []).length, 1);
+  assert.equal((svg.match(/url\(#tex1\)/g) || []).length, 2);
+});
+
 test('exportStem strips extensions and unsafe characters', () => {
   assert.equal(exportStem('my photo.png'), 'my_photo');
   assert.equal(exportStem(''), 'artwork');

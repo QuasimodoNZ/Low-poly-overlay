@@ -8,6 +8,7 @@
 
 import { hexToRgb } from './sampling.js';
 import { polygonBounds } from './geometry.js';
+import { textureOrigin } from './model.js';
 
 function escapeAttr(value) {
   return String(value)
@@ -71,17 +72,18 @@ export function polygonsToSVGString(polygons, options = {}) {
       let fillOpacity = opacityValue(polygon, overlayOpacity);
 
       if (polygon.texture && polygon.texture.href) {
-        const key = `${polygon.texture.href}|${polygon.texture.scale || 1}`;
+        const s = polygon.texture.scale || 1;
+        const origin = textureOrigin(polygon.texture, s);
+        const texW = Math.max(1, (polygon.texture.width || 64) * s);
+        const texH = Math.max(1, (polygon.texture.height || 64) * s);
+        const key = `${polygon.texture.href}|${round2(texW)}|${round2(texH)}|${round2(origin.x)}|${round2(origin.y)}`;
         if (!texturePatterns.has(key)) {
           patternId += 1;
           const id = `tex${patternId}`;
           texturePatterns.set(key, id);
-          const s = polygon.texture.scale || 1;
-          const texW = Math.max(1, (polygon.texture.width || 64) * s);
-          const texH = Math.max(1, (polygon.texture.height || 64) * s);
           defs.push(
             `    <pattern id="${id}" patternUnits="userSpaceOnUse" width="${round2(texW)}" height="${round2(texH)}" ` +
-              `patternTransform="translate(${round2(polygon.texture.offsetX || 0)} ${round2(polygon.texture.offsetY || 0)})">` +
+              `patternTransform="translate(${round2(origin.x)} ${round2(origin.y)})">` +
               `<image href="${escapeAttr(polygon.texture.href)}" width="${round2(texW)}" height="${round2(texH)}" preserveAspectRatio="none"/>` +
               `</pattern>`,
           );
@@ -135,11 +137,12 @@ export function drawPolygonsToContext(ctx, polygons, options = {}) {
         const pattern = ctx.createPattern(polygon.texture.image, 'repeat');
         if (pattern) {
           const s = polygon.texture.scale || 1;
+          const origin = textureOrigin(polygon.texture, s);
           const m = new DOMMatrix();
           m.a = s;
           m.d = s;
-          m.e = polygon.texture.offsetX || 0;
-          m.f = polygon.texture.offsetY || 0;
+          m.e = origin.x;
+          m.f = origin.y;
           pattern.setTransform(m);
           ctx.fillStyle = pattern;
         } else {

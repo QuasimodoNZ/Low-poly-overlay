@@ -56,6 +56,20 @@ and resizing the window never change the artwork.
 - New polygons get a colour sampled from the image (or the default colour if
   *Auto-colour from image* is turned off).
 
+#### Snapping
+Vertices snap to nearby existing vertices while drawing and while dragging an
+existing vertex, so adjacent polygons can share an exact edge instead of leaving
+hairline gaps. The snap radius is a constant size **on screen**, so it behaves
+the same at any zoom level, and a dashed ring highlights the vertex a point is
+about to lock onto.
+
+- **Snap** toolbar button (or *Snap vertices to nearby vertices* in the panel)
+  turns it off and on.
+- Hold **Shift** while placing or dragging a point to bypass snapping for that
+  one edit.
+
+A polygon never snaps onto the vertex it is currently moving.
+
 ### 4. Edit polygons (Select tool, `V`)
 - **Click** a polygon to select it; its vertices appear.
 - **Drag a vertex** to reshape it (self-intersections are rejected live).
@@ -129,9 +143,20 @@ existing work asks for confirmation first).
   never leave the original boundary, never overlap and never leave gaps. Each
   new face can inherit the original colour or be re-sampled from the image
   (RGB or LAB). The whole operation is a single undo step.
-- **Texture fills** — load an image to use as a repeating fill on a polygon,
-  with scale and offset controls. Textures are clipped by the polygon and
-  survive zoom/pan and export (SVG pattern / canvas pattern).
+- **Texture fills** — two ways to repeat a texture inside a polygon:
+  - **Sample from image** — grabs a *tile* of pixels (default 5×5, configurable)
+    from the centre of the selected polygon and repeats it across the shape.
+    Because the block is tiny, large-scale information is left behind: lighting
+    gradients across a sweater, folds, wrinkles and other photographic
+    irregularities disappear, while the fine weave/fibre grain survives. This is
+    the cheap way to get the “simplified surface” look without hand-picking
+    colours for every facet. Re-click after moving the polygon to re-grab the
+    tile from wherever it now sits; the *Scale* slider enlarges the repeat.
+  - **Load file** — tile an external image instead, with scale and offset.
+
+  Textures are clipped by the polygon, are anchored to the polygon centre
+  (sampled) or to an explicit offset (file), and survive zoom/pan, PNG export
+  (canvas pattern) and SVG export (real `<pattern>`).
 
 Both are optional and isolated from the core flat-colour system.
 
@@ -143,6 +168,7 @@ Both are optional and isolated from the core flat-colour system.
 | --- | --- |
 | `V` / `P` / `I` / `H` | Select · Draw · Eyedropper · Pan |
 | Click first point / dbl-click / `Enter` | Close the polygon |
+| `Shift` (while placing/dragging) | Bypass vertex snapping |
 | `Esc` | Cancel drawing · clear selection · cancel eyedropper |
 | `Delete` / `Backspace` | Delete selected vertex, else polygon |
 | Middle-drag / Alt-drag | Pan |
@@ -162,10 +188,11 @@ styles.css            compact dark desktop-first layout
 src/
   app.js              state, interaction, UI wiring, shortcuts, export UI
   geometry.js         pure geometry: point-in-polygon, validity, ear-clip
-                      triangulation, subdivision, closest-edge, bounds
+                      triangulation, subdivision, closest-edge, bounds, snapping
   sampling.js         pure colour maths: hex/rgb, CIELAB, polygon average,
-                      alpha-aware compositing
-  model.js            polygon/state factories + serialisation
+                      alpha-aware compositing, tile extraction
+  tile.js             turns a sampled pixel tile into a repeatable texture
+  model.js            polygon/state factories, texture origin, serialisation
   history.js          snapshot-based undo/redo
   imageState.js       decoded image + offscreen canvas/pixel data for sampling
   renderer.js         SVG rendering of background, polygons, outlines, previews
@@ -201,17 +228,21 @@ Runs the Node unit tests (`node:test`, no dependencies) covering point-in-polygo
 polygon validity, signed area, triangulation (including concave polygons),
 subdivision (area conservation, faces stay inside), colour conversions,
 polygon-average sampling, alpha weighting, composite sampling and stacking
-order, undo/redo semantics, SVG export output, project round-tripping, and a
-DOM-contract check that every element id referenced by `app.js` exists in
-`index.html`.
+order, tile extraction (tile size, centring, edge clamping), texture origin and
+serialisation, snapping candidate selection, undo/redo semantics, SVG export
+output (including texture patterns), project round-tripping, and a DOM-contract
+check that every element id referenced by `app.js` exists in `index.html`.
 
 ### Browser smoke test (optional)
 
 `scripts/browser-smoke.mjs` boots the app on a temporary local server and drives
-the real UI in headless Chromium: import, draw, close, edit vertices, undo/redo,
+the real UI in headless Chromium: import, draw, close, edit vertices, vertex
+snapping (including the Shift bypass and the on/off toggle), undo/redo,
 zoom/resize invariance, average sampling, eyedropper + magnifier, opacity,
-X-ray, background toggle, list selection, delete, subdivision, every export
-format, and a full project save → clear → reload cycle.
+X-ray, background toggle, list selection, delete, subdivision, image-sampled
+textures (the decoded tile is compared pixel-for-pixel against the source image,
+and the gradient-removal property is measured), every export format, and a full
+project save → clear → reload cycle.
 
 ```bash
 npm i --no-save playwright
@@ -243,4 +274,4 @@ node scripts/browser-smoke.mjs
 - Richer subdivision patterns (edge-midpoint splits, blue-noise interior points).
 - Multi-polygon average-colour and bulk recolour tools.
 - Export presets and keyboard-nudge for selected polygons.
-- Optional snapping / shared vertices between adjacent polygons.
+- Snapping whole polygons (and edges) while moving, not just single vertices.

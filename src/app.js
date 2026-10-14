@@ -29,6 +29,7 @@ import {
   polygonBounds,
   subdividePolygon,
   subdivisionFaceCount,
+  findNearestVertex,
   clamp,
 } from './geometry.js';
 import {
@@ -40,6 +41,7 @@ import {
   sampleComposite,
   getPixel,
 } from './sampling.js';
+import { createSampledTexture, DEFAULT_TILE_SIZE, MIN_TILE_SIZE, MAX_TILE_SIZE } from './tile.js';
 import { createImageState } from './imageState.js';
 import { Magnifier } from './magnifier.js';
 import {
@@ -72,6 +74,7 @@ const $ = (id) => document.getElementById(id);
 
 const DEFAULT_FILL = '#8a8f98';
 const POINT_HIT_PX = 10; // screen px radius for vertex/edge hit-testing
+const SNAP_PX = 12; // screen px radius for vertex snapping
 
 const state = {
   image: null, // image state object (see imageState.js)
@@ -87,6 +90,7 @@ const state = {
   hoverVertex: null,
   hoverEdge: null,
   subdivision: { iterations: 0, colorMode: 'inherit', preview: null },
+  snapTarget: null, // vertex the next placed/dragged point would lock onto
   eyedropperPreview: null, // { polygonId, originalFill }
   drag: null,
 };
@@ -124,6 +128,8 @@ function cacheElements() {
     'chk-outlines', 'outline-color', 'outline-width',
     'chk-vertices', 'chk-highlight', 'overlay-opacity', 'overlay-opacity-value',
     'chk-bg', 'chk-autocolor', 'default-fill',
+    'btn-snap', 'chk-snap',
+    'texture-tile-w', 'texture-tile-h', 'btn-texture-sample', 'texture-info',
     'eye-options', 'eye-mode-original', 'eye-mode-composite', 'eye-zoom',
     'export-modal', 'btn-export-close', 'export-scale', 'export-respect-visibility',
     'btn-export-composite', 'btn-export-polygons', 'btn-export-original',
@@ -184,14 +190,17 @@ function render() {
   renderer.setImage(state.image, state.settings);
   renderer.clearTexturePatterns();
   renderer.renderPolygons(state.polygons, state.settings, state.selection);
-  renderer.renderDrawing(state.tool === 'draw' ? state.drawing : null, state.cursorImage);
+  const drawing = state.tool === 'draw' ? state.drawing : null;
+  const cursor = state.snapTarget || state.cursorImage;
+  renderer.renderDrawing(drawing, cursor);
   renderer.renderSubdivisionPreview(state.subdivision.preview);
   renderer.renderHandles(state.polygons, state.settings, state.view, {
     selection: state.selection,
     selectedVertex: state.selectedVertex,
     hoverVertex: state.hoverVertex,
     hoverEdge: state.hoverEdge,
-    drawing: state.tool === 'draw' ? state.drawing : null,
+    drawing,
+    snapTarget: state.snapTarget,
   });
   updateViewLabels();
 }
@@ -423,6 +432,50 @@ function reorderSelection(mode) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Vertex snapping                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Snapping is on unless the user turned it off, and holding Shift while placing
+ * a point or dragging a vertex overrides it for that one edit.
+ */
+function snapEnabled(event) {
+  if (!state.settings.snapVertices) return false;
+  return !(event && event.shiftKey);
+}
+
+/**
+ * Candidate vertices for snapping: every visible polygon, plus the vertices of
+ * a polygon currently being drawn. The vertex the user is editing is excluded so
+ * a shape can never snap onto itself. Because screen-relative and image-space
+ * coordinates differ by the zoom factor, the snap radius is divided by the zoom.
+ */
+function findSnap(imagePoint, event, { polygonId, index } = {}) {
+  if (!snapEnabled(event)) return null;
+
+  const groups = [];
+  for (const polygon of state.polygons) {
+    if (polygon.visible === false) continue;
+    const excludeIndices =
+      polygon.id === polygonId && index !== undefined ? new Set([index]) : null;
+    groups.push({ vertices: polygon.vertices, excludeIndices });
+  }
+  if (state.drawing) {
+    groups.push({
+      vertices: state.drawing.vertices,
+      // Never snap a new point onto the point just placed.
+      excludeIndices: new Set([state.drawing.vertices.length - 1]),
+    });
+  }
+
+  return findNearestVertex(imagePoint, groups, SNAP_PX / state.view.scale);
+}
+
+function clearSnapTarget() {
+  if (state.snapTarget) state.snapTarget = null;
+}
+
+/* ------------------------------------------------------------------ */
 /* Pointer interaction                                                */
 /* ------------------------------------------------------------------ */
 
@@ -453,6 +506,7 @@ function pointerDown(event) {
 
   const screen = screenFromEvent(event);
   const imagePoint = screenToImage(screen);
+  if (!state.drag) state.snapTarget = null;
   els.stage.setPointerCapture?.(event.pointerId);
 
   // Middle mouse (or pan tool / space) always pans, regardless of tool.
@@ -467,7 +521,7 @@ function pointerDown(event) {
   const doublePress = isDoublePress(screen);
 
   if (state.tool === 'draw') {
-    handleDrawClick(imagePoint, screen, { doublePress });
+    handleDrawClick(imagePoint, screen, { doublePress, event });
     return;
   }
 
@@ -481,9 +535,18 @@ function pointerDown(event) {
   }
 }
 
+/** The point a click at `imagePoint` would actually place, after snapping. */
+function resolvePoint(imagePoint, event, options = {}) {
+  const hit = findSnap(imagePoint, event, options);
+  return hit ? hit.point : { ...imagePoint };
+}
+
 function handleDrawClick(imagePoint, screen, options = {}) {
+  const placed = resolvePoint(imagePoint, options.event);
+
   if (!state.drawing) {
-    state.drawing = { vertices: [{ ...imagePoint }] };
+    state.drawing = { vertices: [{ ...placed }] };
+    state.snapTarget = null;
     setStatus('Click to add vertices · click the first point, double-click or press Enter to close · Esc cancels');
     render();
     return;
@@ -508,9 +571,10 @@ function handleDrawClick(imagePoint, screen, options = {}) {
   }
 
   const last = state.drawing.vertices[state.drawing.vertices.length - 1];
-  if (Math.hypot(last.x - imagePoint.x, last.y - imagePoint.y) * state.view.scale < 1.5) return;
+  if (Math.hypot(last.x - placed.x, last.y - placed.y) * state.view.scale < 1.5) return;
 
-  state.drawing.vertices.push({ ...imagePoint });
+  state.drawing.vertices.push({ ...placed });
+  state.snapTarget = null;
   render();
 }
 
@@ -625,7 +689,7 @@ function pointerMove(event) {
   }
 
   if (state.drag) {
-    applyDrag(imagePoint);
+    applyDrag(imagePoint, event);
     return;
   }
 
@@ -634,6 +698,7 @@ function pointerMove(event) {
   if (state.tool === 'draw') {
     state.hoverVertex = null;
     state.hoverEdge = null;
+    state.snapTarget = state.drawing ? findSnap(imagePoint, event)?.point || null : null;
     render();
     return;
   }
@@ -650,15 +715,34 @@ function pointerMove(event) {
   }
 }
 
-function applyDrag(imagePoint) {
+/**
+ * Drag the grabbed point with snapping applied. The snap target is recomputed
+ * from the live pointer position on every move so the vertex can be released
+ * anywhere along the way, and Shift temporarily frees the point from snapping.
+ */
+function applySnappedDrag(drag, imagePoint, event) {
+  if (drag.type !== 'vertex') {
+    state.snapTarget = null;
+    return imagePoint;
+  }
+  const hit = findSnap(imagePoint, event, { polygonId: drag.polygonId, index: drag.index });
+  state.snapTarget = hit ? hit.point : null;
+  return hit ? hit.point : imagePoint;
+}
+
+function applyDrag(rawPoint, event) {
   const drag = state.drag;
   const polygon = state.polygons.find((p) => p.id === drag.polygonId);
   if (!polygon) return;
 
+  const imagePoint = applySnappedDrag(drag, rawPoint, event);
+
   // Ignore sub-threshold movement so a click to select never nudges geometry.
+  // (Measured from the pressed position, not the snapped one, so a snap pull
+  // does not itself count as a drag.)
   if (!drag.recorded) {
     const start = drag.start || imagePoint;
-    const moved = Math.hypot(imagePoint.x - start.x, imagePoint.y - start.y) * state.view.scale;
+    const moved = Math.hypot(rawPoint.x - start.x, rawPoint.y - start.y) * state.view.scale;
     if (moved < 3) return;
   }
 
@@ -702,6 +786,7 @@ function pointerUp(event) {
   }
   if (state.drag) {
     state.drag = null;
+    state.snapTarget = null;
     renderPanel();
     render();
   }
@@ -813,6 +898,7 @@ function setTool(tool) {
   state.hoverVertex = null;
   state.hoverEdge = null;
   state.cursorImage = null;
+  state.snapTarget = null;
 
   for (const id of ['tool-select', 'tool-draw', 'tool-eyedropper', 'tool-pan']) {
     els[id].classList.toggle('active', id === `tool-${tool}`);
@@ -957,6 +1043,7 @@ async function applyTextureFile(file) {
     const { img, dataUrl } = await loadImageFromFile(file);
     recordHistory();
     polygon.texture = {
+      mode: 'image',
       href: dataUrl,
       image: img,
       width: img.naturalWidth || img.width,
@@ -971,6 +1058,58 @@ async function applyTextureFile(file) {
   } catch (error) {
     setStatus(error.message, 'error');
   }
+}
+
+function readTileSize() {
+  const read = (el, fallback) => {
+    const value = Number(el?.value);
+    return Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
+  };
+  return {
+    width: clamp(read(els['texture-tile-w'], DEFAULT_TILE_SIZE), MIN_TILE_SIZE, MAX_TILE_SIZE),
+    height: clamp(read(els['texture-tile-h'], DEFAULT_TILE_SIZE), MIN_TILE_SIZE, MAX_TILE_SIZE),
+  };
+}
+
+/**
+ * Repeat a small pixel block grabbed from the middle of the polygon across the
+ * whole polygon. Sampling one tiny block and tiling it keeps the surface's fine
+ * weave while discarding the large-scale shading and folds that make an image
+ * look photographic — which is the point of a low-poly texture.
+ */
+async function applySampledTexture() {
+  const polygon = getSelectedPolygon();
+  if (!polygon) {
+    setStatus('Select a polygon before sampling a texture', 'error');
+    return;
+  }
+  if (!state.image?.imageData) {
+    setStatus('Texture sampling needs an imported image', 'error');
+    return;
+  }
+
+  const { width, height } = readTileSize();
+  const texture = createSampledTexture(state.image.imageData, polygon.vertices, width, height);
+  if (!texture) {
+    setStatus('Could not sample a tile at the centre of this polygon', 'error');
+    return;
+  }
+  texture.scale = Number(els['texture-scale'].value) || 1;
+
+  try {
+    // The decoded tile is only needed by the canvas/PNG export path.
+    texture.image = await loadImageFromDataUrl(texture.href);
+  } catch {
+    texture.image = null;
+  }
+
+  recordHistory();
+  polygon.texture = texture;
+  els['texture-tile-w'].value = String(texture.tileWidth);
+  els['texture-tile-h'].value = String(texture.tileHeight);
+  render();
+  renderPanel();
+  setStatus(`Tiled a ${texture.tileWidth}×${texture.tileHeight}px sample from the polygon centre`, 'ok');
 }
 
 function updateTextureSetting(key, value) {
@@ -1019,6 +1158,29 @@ function bindDisplaySettings() {
     state.settings.backgroundVisible = els['chk-bg'].checked;
     render();
   });
+  els['chk-snap'].addEventListener('change', () => setSnapEnabled(els['chk-snap'].checked));
+}
+
+/** Toggle vertex snapping and keep both controls in sync. */
+function setSnapEnabled(enabled) {
+  state.settings.snapVertices = !!enabled;
+  if (!state.settings.snapVertices) state.snapTarget = null;
+  syncSnapInputs();
+  render();
+  setStatus(
+    state.settings.snapVertices
+      ? 'Snapping on — hold Shift while placing or dragging a vertex to place it freely'
+      : 'Snapping off',
+  );
+}
+
+function syncSnapInputs() {
+  const enabled = state.settings.snapVertices !== false;
+  if (els['chk-snap']) els['chk-snap'].checked = enabled;
+  if (els['btn-snap']) {
+    els['btn-snap'].classList.toggle('active', enabled);
+    els['btn-snap'].setAttribute('aria-pressed', String(enabled));
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1064,6 +1226,16 @@ function renderPolygonList() {
   els['polygon-list'].replaceChildren(fragment);
 }
 
+function describeTexture(texture) {
+  if (!texture) return 'No texture.';
+  if (texture.mode === 'sample') {
+    const w = texture.tileWidth || texture.width;
+    const h = texture.tileHeight || texture.height;
+    return `Sampled tile ${w}×${h}px, repeated from the polygon centre.`;
+  }
+  return `Image texture, tile ${texture.width}×${texture.height}px.`;
+}
+
 function renderPanel() {
   const polygon = getSelectedPolygon();
   els['no-selection'].hidden = !!polygon;
@@ -1078,17 +1250,22 @@ function renderPanel() {
 
     const iterations = state.subdivision.iterations;
     els['subdiv-faces'].textContent = `${subdivisionFaceCount(polygon.vertices.length, iterations)} faces`;
-    const hasTexture = !!polygon.texture;
+    const texture = polygon.texture;
+    const hasTexture = !!texture;
+    // Sampled textures are anchored to the polygon centre, so manual offsets do
+    // not apply to them.
+    const usesOffsets = hasTexture && texture.mode !== 'sample';
     els['texture-scale'].disabled = !hasTexture;
-    els['texture-offset-x'].disabled = !hasTexture;
-    els['texture-offset-y'].disabled = !hasTexture;
+    els['texture-offset-x'].disabled = !usesOffsets;
+    els['texture-offset-y'].disabled = !usesOffsets;
     els['btn-texture-clear'].disabled = !hasTexture;
     if (hasTexture) {
-      els['texture-scale'].value = String(polygon.texture.scale || 1);
-      els['texture-scale-value'].textContent = `${(polygon.texture.scale || 1).toFixed(2)}×`;
-      els['texture-offset-x'].value = String(polygon.texture.offsetX || 0);
-      els['texture-offset-y'].value = String(polygon.texture.offsetY || 0);
+      els['texture-scale'].value = String(texture.scale || 1);
+      els['texture-scale-value'].textContent = `${(texture.scale || 1).toFixed(2)}×`;
+      els['texture-offset-x'].value = String(texture.offsetX || 0);
+      els['texture-offset-y'].value = String(texture.offsetY || 0);
     }
+    els['texture-info'].textContent = describeTexture(texture);
   }
 
   renderPolygonList();
@@ -1123,6 +1300,9 @@ function scalingPolygons(polygons, scale) {
           scale: (p.texture.scale || 1) * scale,
           offsetX: (p.texture.offsetX || 0) * scale,
           offsetY: (p.texture.offsetY || 0) * scale,
+          anchor: p.texture.anchor
+            ? { x: p.texture.anchor.x * scale, y: p.texture.anchor.y * scale }
+            : undefined,
         }
       : null,
   }));
@@ -1256,6 +1436,7 @@ function syncSettingsInputs() {
   els['overlay-opacity'].value = String(state.settings.overlayOpacity);
   els['overlay-opacity-value'].textContent = `${Math.round(state.settings.overlayOpacity * 100)}%`;
   els['chk-bg'].checked = state.settings.backgroundVisible;
+  syncSnapInputs();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1357,6 +1538,8 @@ function bindToolbar() {
 
   els['btn-undo'].addEventListener('click', undo);
   els['btn-redo'].addEventListener('click', redo);
+
+  els['btn-snap'].addEventListener('click', () => setSnapEnabled(!state.settings.snapVertices));
 
   els['btn-import'].addEventListener('click', () => els['file-input'].click());
   els['file-input'].addEventListener('change', (event) => {
@@ -1483,6 +1666,7 @@ function bindProperties() {
     state.subdivision.colorMode = els['subdiv-color-mode'].value;
   });
 
+  els['btn-texture-sample'].addEventListener('click', applySampledTexture);
   els['btn-texture-load'].addEventListener('click', () => els['texture-input'].click());
   els['texture-input'].addEventListener('change', (event) => {
     const file = event.target.files?.[0];
@@ -1524,6 +1708,7 @@ function bindStage() {
   });
   els.stage.addEventListener('pointerleave', () => {
     state.cursorImage = null;
+    state.snapTarget = null;
     magnifier.hide();
     if (state.tool === 'draw') render();
   });

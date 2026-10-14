@@ -211,6 +211,37 @@ export function closestEdge(point, vertices) {
 }
 
 /**
+ * Nearest vertex to `point` among a set of candidate groups, used for snapping.
+ *
+ * `groups` is an array of `{ vertices, excludeIndices?, ref? }`. `maxDistance` is
+ * in the same units as the vertices (callers pass a screen distance divided by
+ * the zoom scale so the snap radius feels constant on screen). `excludeIndices`
+ * is a `Set` of indices to ignore inside that group (e.g. the vertex currently
+ * being dragged). The winning group's `ref` is handed back untouched.
+ *
+ * Returns `{ point, index, distance, ref }` or null when nothing is in range.
+ */
+export function findNearestVertex(point, groups, maxDistance) {
+  if (!(maxDistance > 0)) return null;
+  let best = null;
+
+  for (const group of groups) {
+    if (!group || !group.vertices) continue;
+    const exclude = group.excludeIndices;
+    group.vertices.forEach((vertex, index) => {
+      if (exclude && exclude.has(index)) return;
+      const d = distance(point, vertex);
+      if (d > maxDistance) return;
+      if (!best || d < best.distance) {
+        best = { point: { x: vertex.x, y: vertex.y }, index, distance: d, ref: group.ref };
+      }
+    });
+  }
+
+  return best;
+}
+
+/**
  * A polygon is "simple" when its boundary does not cross itself. This rejects
  * self-intersecting rings, duplicated consecutive vertices and zero-area rings.
  */
